@@ -1,17 +1,9 @@
 package cmd
 
 import (
-	"context"
-	"errors"
-	"net/http"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"github.com/hdget/sdk"
 	logger "github.com/hdget/utils/logger"
 	"github.com/rfancn/zentao-mattermost/g"
-	"github.com/rfancn/zentao-mattermost/internal/dedupe"
 	"github.com/rfancn/zentao-mattermost/internal/webhook"
 	"github.com/spf13/cobra"
 )
@@ -46,38 +38,5 @@ func runServer() {
 		addr = argAppAddress
 	}
 
-	dedupe.Init()
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           webhook.New(),
-		ReadHeaderTimeout: time.Duration(g.Config.Server.ReadTimeoutSeconds) * time.Second,
-		ReadTimeout:       time.Duration(g.Config.Server.ReadTimeoutSeconds) * time.Second,
-		WriteTimeout:      time.Duration(g.Config.HTTP.TimeoutSeconds+5) * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		sdk.Logger().Info("webhook 服务启动", "address", addr, "path", g.Config.Server.Path)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			sdk.Logger().Fatal("webhook 服务异常退出", "err", err)
-		}
-	}()
-
-	<-ctx.Done()
-
-	shutdownCtx, cancel := context.WithTimeout(
-		context.Background(),
-		time.Duration(g.Config.Server.ShutdownTimeoutSeconds)*time.Second,
-	)
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		sdk.Logger().Error("webhook 服务关闭失败", "err", err)
-		return
-	}
-	sdk.Logger().Info("webhook 服务已关闭")
+	webhook.Serve(addr)
 }
