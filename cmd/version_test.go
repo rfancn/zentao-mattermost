@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rfancn/zentao-mattermost/g"
+	"github.com/rfancn/zentao-mattermost/config"
 )
 
 func TestExecuteVersion(t *testing.T) {
@@ -19,7 +19,7 @@ func TestExecuteVersion(t *testing.T) {
 
 	Execute()
 
-	if !strings.Contains(out.String(), g.App) {
+	if !strings.Contains(out.String(), config.App) {
 		t.Errorf("version 输出 = %q", out.String())
 	}
 }

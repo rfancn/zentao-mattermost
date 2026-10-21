@@ -1,4 +1,4 @@
-package errdef
+package httpclient
 
 import (
 	"errors"

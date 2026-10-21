@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/rfancn/zentao-mattermost/g"
+	"github.com/rfancn/zentao-mattermost/config"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ var cmdVersion = &cobra.Command{
 	Short: "打印版本信息",
 	Run: func(cmd *cobra.Command, args []string) {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s (commit %s, built %s, %s/%s)\n",
-			g.App, version, commit, buildDate, runtime.GOOS, runtime.GOARCH)
+			config.App, version, commit, buildDate, runtime.GOOS, runtime.GOARCH)
 	},
 }
 

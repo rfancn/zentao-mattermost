@@ -1,0 +1,29 @@
+[sdk.log]
+    level = "info"
+    filename = "notify-bridge.log"
+    dir = "logs"
+    [sdk.log.rotate]
+        max_age = 168
+        max_backup = 5
+        max_size = 100
+
+[app]
+    # 服务监听地址，可被 --app-address 覆盖
+    listen = ":8080"
+    # 必填：禅道 webhook 请求必须携带的共享密钥
+    # 支持 Authorization: Bearer <token> 或 X-Webhook-Token: <token>
+    token = ""
+
+    [app.routes.zentao-mattermost-notify]
+        [app.routes.zentao-mattermost-notify.source]
+            type = "zentao"
+            url = "https://zentao"
+            account = "admin"
+            password = "YOUR_ZENTAO_PASSWORD"
+        [app.routes.zentao-mattermost-notify.target]
+            type = "mattermost"
+            url = "https://mattermost"
+            token = "YOUR_MATTERMOST_BOT_TOKEN"
+            # 为空时使用 token 所属用户
+            bot_user = "zentao-bot"
+

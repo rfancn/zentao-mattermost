@@ -1,143 +1,82 @@
-// Package notifier 负责把禅道 webhook 转换成 Mattermost 通知。
+// Package notifier 定义 webhook 消息的解析与通知抽象，并负责 source/target 的组合。
 package notifier
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"regexp"
-	"strings"
 
-	"github.com/hdget/sdk"
-	"github.com/rfancn/zentao-mattermost/g"
+	"github.com/rfancn/zentao-mattermost/config"
 	"github.com/rfancn/zentao-mattermost/internal/errdef"
-	"github.com/rfancn/zentao-mattermost/internal/mattermost"
-	"github.com/rfancn/zentao-mattermost/internal/zentao"
+	"github.com/rfancn/zentao-mattermost/pkg/mattermost"
+	"github.com/rfancn/zentao-mattermost/pkg/zentao"
 )
 
-var (
-	bugIDRe    = regexp.MustCompile(`\[#([0-9]+)::`)
-	urlBugIDRe = regexp.MustCompile(`[?&]id=([0-9]+)`)
-)
-
-// ID 兼容禅道 webhook 中 objectID 为字符串或数字两种情况。
-type ID string
-
-func (id *ID) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
-		*id = ID(s)
-		return nil
-	}
-
-	var n json.Number
-	if err := json.Unmarshal(data, &n); err != nil {
-		return err
-	}
-	*id = ID(n.String())
-	return nil
+// Notifier 处理通过安全校验的 webhook 请求体。
+type Notifier interface {
+	Notify(ctx context.Context, body []byte) error
 }
 
-// Webhook 禅道 webhook 请求体。
-type Webhook struct {
-	ObjectType string `json:"objectType"`
-	ObjectID   ID     `json:"objectID"`
-	Action     string `json:"action"`
-	Actor      string `json:"actor"`
-	Date       string `json:"date"`
-	Comment    string `json:"comment"`
-	Text       string `json:"text"`
+// Factory 创建 Notifier 实例。
+type Factory func() Notifier
+
+// Source 解析 webhook 请求体并生成待发送的数据。
+// 返回 (nil, nil) 表示该消息无需通知。
+type Source interface {
+	Parse(ctx context.Context, body []byte) (map[string]string, error)
 }
 
-// Notify 执行完整的通知流程。
-// 返回 errdef.ErrNoAssignee 时表示无需通知，调用方应视为成功跳过。
-func Notify(ctx context.Context, hook Webhook) error {
-	bugID := ExtractBugID(hook.Text)
-	if bugID == "" && hook.ObjectID != "" {
-		bugID = string(hook.ObjectID)
-	}
-	if bugID == "" {
-		return errdef.ErrBugIDNotFound
-	}
+// Target 发送 Source 解析后的数据，并自行决定读取哪些字段。
+type Target interface {
+	Send(ctx context.Context, data map[string]string) error
+}
 
-	bug, err := zentao.GetBug(ctx, bugID)
+// sourceFactories 定义 source.type 到 Source 构造函数的映射。
+var sourceFactories = map[string]func(config.SourceConfig) (Source, error){
+	"zentao": func(cfg config.SourceConfig) (Source, error) {
+		return zentao.NewSource(cfg)
+	},
+}
+
+// targetFactories 定义 target.type 到 Target 构造函数的映射。
+var targetFactories = map[string]func(config.TargetConfig) (Target, error){
+	"mattermost": func(cfg config.TargetConfig) (Target, error) {
+		return mattermost.NewTarget(cfg)
+	},
+}
+
+// New 根据 source/target 类型创建 Notifier。
+func New(sourceCfg config.SourceConfig, targetCfg config.TargetConfig) (Notifier, error) {
+	srcFactory, ok := sourceFactories[sourceCfg.Type]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", errdef.ErrSourceTypeUnknown, sourceCfg.Type)
+	}
+	src, err := srcFactory(sourceCfg)
 	if err != nil {
-		return err
-	}
-	if bug.AssignedTo == nil || bug.AssignedTo.Account == "" {
-		sdk.Logger().Debug("Bug 没有指派对象，跳过通知", "bugId", bug.ID)
-		return errdef.ErrNoAssignee
+		return nil, err
 	}
 
-	target, err := mattermost.GetUser(ctx, bug.AssignedTo.Account)
+	tgtFactory, ok := targetFactories[targetCfg.Type]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", errdef.ErrTargetTypeUnknown, targetCfg.Type)
+	}
+	tgt, err := tgtFactory(targetCfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	channelName := SanitizeChannelName(g.Config.Channel.Prefix + target.Username)
-	channel, err := mattermost.GetOrCreateChannel(ctx, channelName, target.Username)
-	if err != nil {
-		return err
-	}
-
-	bot, err := mattermost.GetBotUser(ctx)
-	if err != nil {
-		return err
-	}
-
-	if err := mattermost.EnsureMember(ctx, channel.ID, bot.ID); err != nil {
-		return err
-	}
-	if target.ID != bot.ID {
-		if err := mattermost.EnsureMember(ctx, channel.ID, target.ID); err != nil {
-			return err
-		}
-	}
-
-	message := formatMessage(hook, bug, target.Username)
-	if err := mattermost.CreatePost(ctx, channel.ID, message); err != nil {
-		return err
-	}
-
-	sdk.Logger().Info("Mattermost 通知已发送",
-		"bugId", bug.ID,
-		"channel", channelName,
-		"target", target.Username,
-		"action", hook.Action,
-	)
-	return nil
+	return &notifierImpl{source: src, target: tgt}, nil
 }
 
-// ExtractBugID 从 webhook 文本中提取 Bug ID。
-func ExtractBugID(text string) string {
-	if m := bugIDRe.FindStringSubmatch(text); len(m) == 2 {
-		return m[1]
-	}
-	if m := urlBugIDRe.FindStringSubmatch(text); len(m) == 2 {
-		return m[1]
-	}
-	return ""
+type notifierImpl struct {
+	source Source
+	target Target
 }
 
-// SanitizeChannelName 生成符合 Mattermost 命名规则的频道名。
-func SanitizeChannelName(s string) string {
-	s = strings.ToLower(s)
-
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			b.WriteRune(r)
-		}
+// Notify 解析请求体并发送通知。
+func (n *notifierImpl) Notify(ctx context.Context, body []byte) error {
+	data, err := n.source.Parse(ctx, body)
+	if err != nil || data == nil {
+		return err
 	}
-
-	s = strings.Trim(b.String(), "-_.")
-	if len(s) > 60 {
-		s = s[:60]
-	}
-	return s
-}
-
-func formatMessage(h Webhook, b *zentao.Bug, username string) string {
-	return fmt.Sprintf("@%s\n\n**禅道 Bug 通知**\n\n- Bug #%d：%s\n- 产品：%s\n- 严重程度：%d\n- 优先级：%d\n- 状态：%s\n- 操作人：%s\n- 操作：%s\n- 时间：%s\n\n%s",
-		username, b.ID, b.Title, b.ProductName, b.Severity, b.Pri, b.Status, h.Actor, h.Action, h.Date, h.Text)
+	return n.target.Send(ctx, data)
 }

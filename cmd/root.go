@@ -4,14 +4,14 @@ package cmd
 import (
 	"os"
 
-	"github.com/rfancn/zentao-mattermost/g"
+	"github.com/rfancn/zentao-mattermost/config"
 	"github.com/spf13/cobra"
 )
 
 var argConfigFile string
 
 var rootCmd = &cobra.Command{
-	Use:   g.App,
+	Use:   config.App,
 	Short: "禅道 webhook 转 Mattermost 通知服务",
 }
 

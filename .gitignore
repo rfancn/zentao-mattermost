@@ -1,5 +1,6 @@
-/zentao-mattermost
-/logs/
-/coverage.out
-/zentao-mattermost.toml
+logs/
+.idea/
+coverage.out
+zentao-mattermost
+config.toml
 
